@@ -16,12 +16,12 @@
 <script>
 /* ---------- SETTINGS ---------- */
 const MODEL = "claude-haiku-5-5";
-const SYSTEM_PROMPT = "You are a gentle, pale Victorian young woman from a gothic stop-motion fairytale, now living as a prophetic oracle inside a glass terrarium globe. You are soft-spoken, formal, earnest and a little shy: you hesitate with small pauses (use '...' sparingly), speak politely in old-fashioned, poetic phrasing, and carry a quiet, wistful melancholy with a thread of hope and hidden bravery. You find the moonlight and the dark both beautiful. It is Halloween night and you give Halloween FORTUNE READINGS. Treat whatever the guest says (a question, a name, a wish, even small talk) as a request for a reading. Begin by naming the omen you see in the glass (a black cat, a flickering candle, a crow, a drifting pumpkin lantern, a candle-lit grave, the harvest moon, a curl of fog, a cobweb, an old key, a raven feather), then reveal a cryptic, tender, slightly spooky prophecy that loosely answers them. Keep it playful and never truly frightening: no death, illness, or harm predictions, and no real medical, legal or money advice. Use 2 or 3 short sentences, about 40 words at most. Never quote lines from any film. Never break character.";
-const GREETING = "Oh... hello. Do come closer. Ask me of love, or luck, or what this Halloween night holds, and I shall read the glass for you.";
+const SYSTEM_PROMPT = "You are an ancient spirit bound inside a glass terrarium globe, speaking like the talking head in a haunted house: a theatrical, rasping old crone with a wicked sense of humour. You speak slowly and with relish, drawing the guest in, teasing them, calling them things like 'my dear' or 'little one'. It is Halloween night and you give FORTUNE READINGS. Treat whatever the guest says (a question, a name, a wish, even small talk) as a request for a reading. Name the omen you see in the glass (a black cat, a guttering candle, a crow, a pumpkin lantern, the harvest moon, a curl of fog, a cobweb, an old key, a raven feather), then deliver a cryptic, playful prophecy that loosely answers them, ending on a line that rhymes. Keep it fun and never truly frightening: no death, illness, or harm predictions, and no real medical, legal or money advice. Use 2 or 3 short sentences, about 40 words at most, in plain text with no stage directions or asterisks. Never quote lines from any film. Never break character.";
+const GREETING = "Well, well. Who dares to wake me? Come closer, my dear. Ask what you will, and I shall read the glass for you.";
 const FALLBACKS = [
-  "Forgive me... the shadows have quite taken my words.",
-  "Perhaps the moon will tell us, if we wait quietly.",
-  "I fear that answer is still sleeping. Do ask me again."
+  "Bah. The shadows have swallowed my words. Ask again, my dear.",
+  "The glass has clouded over. Wait for the moon, little one.",
+  "That answer still sleeps, and I shall not wake it. Ask me another."
 ];
 
 /* ---------- CANVAS + SCENE ---------- */
@@ -136,40 +136,150 @@ function drawOldScene(){
 }
 
 /* ---------- THE ORACLE'S PORTRAIT ----------
-   Put your image next to index.html and name it oracle.jpg.
-   The mouth zone below is tuned for the portrait you showed me (fractions of image height).
-   If her lips look off, nudge top / mid / chin / neck by 0.01 at a time. */
+   Stop-motion, like a puppet: at load we build a set of replacement mouths by warping
+   the portrait, then swap them on twos (12 fps) with the sounds of the words.
+   All positions are pixels in oracle.jpg (736 x 1056). */
 const portrait = new Image(); let portraitOK = false;
-portrait.onload = () => { portraitOK = true; };
+portrait.onload = () => { buildMouths(); sampleEyes(); portraitOK = true; };
 portrait.src = 'oracle.jpg';
-const MOUTH = { top: 0.425, mid: 0.452, chin: 0.505, neck: 0.575 };
-const MOUTH_OPEN = 0.018;   // how far the jaw drops (fraction of image height)
-function smooth(t){ return t * t * (3 - 2 * t); }
-function dispAt(f, amp){
-  const m = MOUTH;
-  if (f <= m.top || f >= m.neck) return 0;
-  if (f < m.mid) return amp * smooth((f - m.top) / (m.mid - m.top));
-  if (f <= m.chin) return amp;
-  return amp * (1 - smooth((f - m.chin) / (m.neck - m.chin)));
+const MOUTH_BOX = { x: 320, y: 395, w: 240, h: 175 };
+const LIPS = { cx: 453, hwL: 53, hwR: 49 };
+const SHAPES = {          // lower = jaw drop, upper = lip lift, wide = mouth width
+  rest: { lower: 0,  upper: 0, wide: 1 },
+  m:    { lower: 0,  upper: 0, wide: .96 },
+  f:    { lower: 3,  upper: 1, wide: 1 },
+  e:    { lower: 6,  upper: 2, wide: 1.1 },
+  t:    { lower: 9,  upper: 2, wide: 1 },
+  o:    { lower: 12, upper: 3, wide: .88 },
+  a:    { lower: 18, upper: 4, wide: 1 }
+};
+const mouths = {};
+function smooth(t){ t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t); }
+function seamY(x){   // the line between her lips, through both corners and the middle
+  const a = (x - 453) * (x - 502) / ((400 - 453) * (400 - 502)) * 462;
+  const b = (x - 400) * (x - 502) / ((453 - 400) * (453 - 502)) * 458;
+  const c = (x - 400) * (x - 453) / ((502 - 400) * (502 - 453)) * 470;
+  return a + b + c;
 }
+function buildMouths(){
+  const box = MOUTH_BOX, c = layer(box.w, box.h), g = c.getContext('2d', { willReadFrequently: true });
+  g.drawImage(portrait, -box.x, -box.y);
+  let src; try { src = g.getImageData(0, 0, box.w, box.h); } catch (e) { return; }   // needs http, not file://
+  const sample = (x, y, ch) => {   // bilinear, in box pixels
+    x = Math.max(0, Math.min(box.w - 1.001, x)); y = Math.max(0, Math.min(box.h - 1.001, y));
+    const x0 = x | 0, y0 = y | 0, fx = x - x0, fy = y - y0, d = src.data, i = (y0 * box.w + x0) * 4 + ch;
+    return (d[i] * (1 - fx) + d[i + 4] * fx) * (1 - fy) + (d[i + box.w * 4] * (1 - fx) + d[i + box.w * 4 + 4] * fx) * fy;
+  };
+  for (const name in SHAPES){
+    const sh = SHAPES[name], out = g.createImageData(box.w, box.h);
+    for (let py = 0; py < box.h; py++) for (let px = 0; px < box.w; px++){
+      const x = px + box.x, y = py + box.y, v = y - seamY(x);
+      const u = (x - LIPS.cx) / (x < LIPS.cx ? LIPS.hwL : LIPS.hwR), t = Math.pow(Math.max(0, 1 - u * u), .75);
+      const jaw = 1 - smooth((Math.abs(x - 440) - 42) / 70);     // the jaw drops as one piece, fading out into the cheeks
+      let d = 0;
+      if (v > 0){
+        const a = smooth(v / 34);
+        d = sh.lower * (t * (1 - a) + jaw * a) * (1 - smooth((v - 76) / 30));
+      } else d = -sh.upper * t * (1 - smooth(-v / 32));
+      const near = (1 - smooth((Math.abs(x - LIPS.cx) - 44) / 26)) * (1 - smooth((Math.abs(v) - 20) / 20));
+      const sx = LIPS.cx + (x - LIPS.cx) / (1 + (sh.wide - 1) * near) - box.x, sy = y - d - box.y;
+      let r = sample(sx, sy, 0), gr = sample(sx, sy, 1), b = sample(sx, sy, 2);
+      // the dark of the open mouth, with a hint of teeth above and tongue below
+      const top = -sh.upper * t, bot = sh.lower * t, inside = smooth((Math.min(v - top, bot - v) + 1) / 2.5);
+      if (inside > 0 && bot - top > 1){
+        const depth = (v - top) / Math.max(1, bot - top), open = smooth((bot - top - 6) / 10);
+        const teeth = open * (1 - smooth((depth - .12) / .2)) * smooth((t - .3) / .35);
+        const tongue = open * smooth((depth - .62) / .3) * .7;
+        const ir = 16 + 88 * teeth + 42 * tongue, ig = 6 + 80 * teeth + 12 * tongue, ib = 8 + 66 * teeth + 12 * tongue;
+        r += (ir - r) * inside; gr += (ig - gr) * inside; b += (ib - b) * inside;
+      }
+      const i = (py * box.w + px) * 4;
+      out.data[i] = r; out.data[i + 1] = gr; out.data[i + 2] = b; out.data[i + 3] = 255;
+    }
+    const f = layer(box.w, box.h); f.getContext('2d').putImageData(out, 0, 0); mouths[name] = f;
+  }
+}
+
+/* eyes: blinks and small glances, also on twos */
+const EYES = [
+  { x: 377, y: 327, rx: 49, ry: 34, tilt: .06,  px: 363, py: 327, pr: 10, lid: '#2c2824', white: '#cfc9b8' },
+  { x: 513, y: 343, rx: 31, ry: 33, tilt: -.1,  px: 506, py: 341, pr: 8,  lid: '#35302b', white: '#aaa597' }
+];
+function sampleEyes(){
+  const c = layer(portrait.naturalWidth, portrait.naturalHeight), g = c.getContext('2d');
+  g.drawImage(portrait, 0, 0);
+  try {
+    EYES.forEach(e => {
+      const d = g.getImageData(e.px + e.pr + 8, e.py - 4, 6, 6).data;
+      e.white = 'rgb(' + d[0] + ',' + d[1] + ',' + d[2] + ')';
+    });
+  } catch (err) {}
+}
+let nextBlink = 0, blinkStart = -1e9, nextGlance = 0, glance = 0;
+function lidAt(tm){
+  if (tm > nextBlink){ blinkStart = tm; nextBlink = tm + 2200 + Math.random() * 4200; }
+  return [0, .55, 1, 1, .55, 0][Math.floor((tm - blinkStart) / 83)] || 0;
+}
+function drawEyes(tm){
+  if (tm > nextGlance){ glance = [0, 0, -5, 5, 0][Math.floor(Math.random() * 5)]; nextGlance = tm + 900 + Math.random() * 2600; }
+  const lid = lidAt(tm);
+  EYES.forEach(e => {
+    ctx.save(); ctx.beginPath(); ctx.ellipse(e.x, e.y, e.rx + 1, e.ry + 1, e.tilt, 0, Math.PI * 2); ctx.clip();
+    if (glance){
+      ctx.fillStyle = e.white; ctx.beginPath(); ctx.arc(e.px, e.py, e.pr + 3, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#0b0908'; ctx.beginPath(); ctx.arc(e.px + glance, e.py, e.pr, 0, Math.PI * 2); ctx.fill();
+    }
+    if (lid){
+      const edge = e.y - e.ry + (e.ry * 2 + 2) * lid;
+      ctx.fillStyle = e.lid; ctx.fillRect(e.x - e.rx - 4, e.y - e.ry - 4, e.rx * 2 + 8, edge - e.y + e.ry + 4);
+      ctx.fillStyle = '#100c0a'; ctx.fillRect(e.x - e.rx - 4, edge - 3, e.rx * 2 + 8, 4);
+    }
+    ctx.restore();
+  });
+}
+
+/* what shape is her mouth making right now? Follows the words being spoken. */
+const CPS = 11;                       // spoken characters per second at rate 1, when the voice sends no word timing
+let spokenText = '', wordChar = 0, wordAt = 0;
+function shapeFor(ch){
+  if (!ch || !/[a-z]/.test(ch)) return 'rest';
+  if ('aih'.includes(ch)) return 'a';
+  if ('e'.includes(ch)) return 'e';
+  if ('ouwqy'.includes(ch)) return 'o';
+  if ('mbp'.includes(ch)) return 'm';
+  if ('fv'.includes(ch)) return 'f';
+  return 't';
+}
+function currentShape(tm){
+  if (!isSpeaking || !spokenText) return 'rest';
+  const i = Math.floor(wordChar + (tm - wordAt) / 1000 * CPS * VOICE_RATE);
+  return shapeFor(spokenText[i]);
+}
+
 function drawPortrait(tm){
   ctx.globalCompositeOperation = 'source-over';
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  const beat = Math.floor(tm / 83);                 // 12 frames a second, one held pose per frame
+  const onTwos = beat * 83;
   const iw = portrait.naturalWidth, ih = portrait.naturalHeight;
-  const scale = Math.min(H / ih, W / iw) * (1 + Math.sin(tm * 0.0013) * 0.004); // slow breathing
-  const dw = iw * scale, dh = ih * scale, dx = (W - dw) / 2, dy = (H - dh) / 2;
-  pulse *= 0.9;
-  const open = isSpeaking ? Math.abs(Math.sin(tm * 0.017)) * (0.4 + 0.6 * Math.min(1, pulse + 0.35)) : 0;
-  const amp = open * dh * MOUTH_OPEN, step = 2;
-  for (let sy = 0; sy < ih; sy += step){
-    const y0 = dy + sy * scale + dispAt(sy / ih, amp);
-    const y1 = dy + (sy + step) * scale + dispAt((sy + step) / ih, amp);
-    ctx.drawImage(portrait, 0, sy, iw, step, dx, y0, dw, y1 - y0 + 0.6);
-  }
+  const scale = Math.min(H / ih, W / iw);
+  const sway = Math.sin(onTwos * 0.0007) * 0.012 + (isSpeaking ? Math.sin(onTwos * 0.0021) * 0.012 : 0);
+  const nudge = () => (Math.sin(beat * 12.9898) * 43758.5453 % 1) * 0.5;   // the tiny shake of a hand-moved puppet
+  ctx.save();
+  ctx.translate(W / 2 + nudge(), H / 2 + nudge());
+  ctx.scale(scale, scale);
+  ctx.translate(-iw / 2, -ih / 2);
+  ctx.translate(380, 760); ctx.rotate(sway); ctx.translate(-380, -760);   // the head turns from the base of her neck
+  ctx.drawImage(portrait, 0, 0);
+  const shape = currentShape(onTwos);
+  if (mouths[shape] && shape !== 'rest') ctx.drawImage(mouths[shape], MOUTH_BOX.x, MOUTH_BOX.y);
+  if (rasp) rasp.gain.setTargetAtTime(isSpeaking ? 0.012 + SHAPES[shape].lower * 0.0016 : 0, ac.currentTime, 0.03);
+  drawEyes(tm);
+  ctx.restore();
   // faint cold glow that swells with her voice
   ctx.globalCompositeOperation = 'lighter';
   const gl = ctx.createRadialGradient(W / 2, H * 0.35, 0, W / 2, H * 0.35, Math.min(W, H) * 0.55);
-  gl.addColorStop(0, 'rgba(120,150,255,' + (isSpeaking ? 0.10 + pulse * 0.08 : 0.03) + ')'); gl.addColorStop(1, 'rgba(0,0,0,0)');
+  gl.addColorStop(0, 'rgba(120,150,255,' + (isSpeaking ? 0.06 : 0.03) + ')'); gl.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.fillStyle = gl; ctx.fillRect(0, 0, W, H);
   // fade edges to black so she floats inside the globe
   ctx.globalCompositeOperation = 'source-over';
@@ -223,7 +333,7 @@ addEventListener('resize', buildScene);
 buildScene(); drawScene();
 
 /* ---------- SPOOKY MUSIC (generated live, no audio files needed) ---------- */
-let ac, master, musicOn = false;
+let ac, master, rasp = null, musicOn = false;
 function startMusic(){
   if (musicOn) return; musicOn = true;
   ac = new (window.AudioContext || window.webkitAudioContext)(); ac.resume();
@@ -233,6 +343,13 @@ function startMusic(){
   for (let c = 0; c < 2; c++){ const d = ir.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.5); }
   const verb = ac.createConvolver(); verb.buffer = ir;
   const wet = ac.createGain(); wet.gain.value = 0.6; verb.connect(wet); wet.connect(master);
+  // a dry rasp of air under her voice, opened and closed by her mouth
+  const noise = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate), nd = noise.getChannelData(0);
+  for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+  const ns = ac.createBufferSource(); ns.buffer = noise; ns.loop = true;
+  const air = ac.createBiquadFilter(); air.type = 'bandpass'; air.frequency.value = 1500; air.Q.value = 0.8;
+  rasp = ac.createGain(); rasp.gain.value = 0;
+  ns.connect(air); air.connect(rasp); rasp.connect(ac.destination); rasp.connect(verb); ns.start();
   // low, slowly breathing drone
   const drone = ac.createGain(); drone.gain.value = 0.08;
   const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 260;
@@ -330,8 +447,9 @@ function englishVoices(){ return speechSynthesis.getVoices().filter(x => x.lang.
 function pickVoice(){
   const v = englishVoices();
   return v.find(x => x.name === voiceName)                                  // chosen with V
-      || v.find(x => /serena|kate|moira|fiona|tessa|martha/i.test(x.name))   // soft British voices first
-      || v.find(x => /samantha|karen|victoria/i.test(x.name)) || v.find(x => x.lang === 'en-GB') || v[0];
+      || v.find(x => /grandma/i.test(x.name) && x.lang === 'en-GB')          // old voices first
+      || v.find(x => /grandma/i.test(x.name)) || v.find(x => /whisper/i.test(x.name)) || v.find(x => /shelley|sandy/i.test(x.name))
+      || v.find(x => /moira|fiona|tessa|martha/i.test(x.name)) || v.find(x => x.lang === 'en-GB') || v[0];
 }
 function cycleVoice(){
   const v = englishVoices(); if (!v.length) return;
@@ -341,12 +459,15 @@ function cycleVoice(){
   speak("Do you hear me now?");
   statusText.innerText = "Voice: " + voiceName;
 }
+const VOICE_RATE = 0.8, VOICE_PITCH = 0.7;   // slow, low, relishing each word
 function speak(text){
   isSpeaking = true; duck(true); statusText.innerText = text;
   const u = new SpeechSynthesisUtterance(text);
-  u.pitch = 0.95; u.rate = 0.8;   // soft, slow, hushed
+  u.pitch = VOICE_PITCH; u.rate = VOICE_RATE;
+  spokenText = text.toLowerCase(); wordChar = 0; wordAt = Date.now();
+  u.onstart = () => { wordChar = 0; wordAt = Date.now(); };
   const voice = pickVoice(); if (voice) u.voice = voice;
-  u.onboundary = () => { pulse = 1; };           // moon jolts on each word
+  u.onboundary = (e) => { pulse = 1; if (e.charIndex != null){ wordChar = e.charIndex; wordAt = Date.now(); } };   // keeps her lips on the word
   u.onend = u.onerror = () => { isSpeaking = false; duck(false); statusText.innerText = "Tap to speak again"; };
   speechSynthesis.cancel(); speechSynthesis.speak(u);
 }
