@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>The Burton Terrarium Oracle</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; -webkit-user-select: none; user-select: none; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  #status { position: fixed; bottom: 4vh; width: 100%; text-align: center; font: 14px/1.4 Georgia, serif; letter-spacing: 4px; color: rgba(200,205,255,.55); text-transform: uppercase; pointer-events: none; padding: 0 8vw; box-sizing: border-box; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="status">Tap to wake the oracle</div>
+<script>
+/* ---------- SETTINGS ---------- */
+const MODEL = "claude-haiku-5-5";
+const SYSTEM_PROMPT = "You are a gentle, pale Victorian young woman from a gothic stop-motion fairytale, now living as a prophetic oracle inside a glass terrarium globe. You are soft-spoken, formal, earnest and a little shy: you hesitate with small pauses (use '...' sparingly), speak politely in old-fashioned, poetic phrasing, and carry a quiet, wistful melancholy with a thread of hope and hidden bravery. You find the moonlight and the dark both beautiful. It is Halloween night and you give Halloween FORTUNE READINGS. Treat whatever the guest says (a question, a name, a wish, even small talk) as a request for a reading. Begin by naming the omen you see in the glass (a black cat, a flickering candle, a crow, a drifting pumpkin lantern, a candle-lit grave, the harvest moon, a curl of fog, a cobweb, an old key, a raven feather), then reveal a cryptic, tender, slightly spooky prophecy that loosely answers them. Keep it playful and never truly frightening: no death, illness, or harm predictions, and no real medical, legal or money advice. Use 2 or 3 short sentences, about 40 words at most. Never quote lines from any film. Never break character.";
+const GREETING = "Oh... hello. Do come closer. Ask me of love, or luck, or what this Halloween night holds, and I shall read the glass for you.";
+const FALLBACKS = [
+  "Forgive me... the shadows have quite taken my words.",
+  "Perhaps the moon will tell us, if we wait quietly.",
+  "I fear that answer is still sleeping. Do ask me again."
+];
+
+/* ---------- CANVAS + SCENE ---------- */
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const statusText = document.getElementById('status');
+let W, H, treeLayer, skyLayer, moonX, moonY, moonR;
+let isSpeaking = false, pulse = 0;
+
+function rngFactory(seed){ return function(){ seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+function layer(w, h){ const c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
+
+function buildScene(){
+  W = canvas.width = innerWidth; H = canvas.height = innerHeight;
+  moonX = W * 0.5; moonY = H * 0.46; moonR = Math.min(W, H) * 0.09;
+
+  // sky: violet-blue glow behind everything (lit area = what the projector shows on the paper)
+  skyLayer = layer(W, H);
+  const s = skyLayer.getContext('2d');
+  const g = s.createRadialGradient(moonX, moonY, 0, moonX, moonY, Math.max(W, H) * 0.75);
+  g.addColorStop(0, '#6f69c9'); g.addColorStop(0.45, '#3d3a88'); g.addColorStop(1, '#0c0b24');
+  s.fillStyle = g; s.fillRect(0, 0, W, H);
+
+  // trees: drawn once, black silhouettes
+  treeLayer = layer(W, H);
+  const t = treeLayer.getContext('2d');
+  const rnd = rngFactory(7);
+  t.strokeStyle = '#000'; t.lineCap = 'round'; t.lineJoin = 'round';
+
+  function tendril(x, y, len){
+    t.lineWidth = 0.7; t.beginPath(); t.moveTo(x, y);
+    let px = x, py = y;
+    for (let i = 0; i < len; i += 6){ px += (rnd() - 0.5) * 2.2; py += 6; t.lineTo(px, py); }
+    t.stroke();
+  }
+  function branch(x, y, a, len, w, depth){
+    const step = 9, n = Math.max(3, Math.floor(len / step));
+    const bend = (rnd() - 0.5) * 0.25;
+    for (let i = 0; i < n; i++){
+      a += (rnd() - 0.5) * 0.55 + bend;
+      const nx = x + Math.cos(a) * step, ny = y + Math.sin(a) * step;
+      t.lineWidth = Math.max(0.8, w * (1 - i / n * 0.45));
+      t.beginPath(); t.moveTo(x, y); t.lineTo(nx, ny); t.stroke();
+      if (depth > 0 && rnd() < 0.16) branch(nx, ny, a + (rnd() < 0.5 ? -1 : 1) * (0.5 + rnd() * 0.7), len * 0.55, w * 0.62, depth - 1);
+      if (depth <= 2 && rnd() < 0.22) tendril(nx, ny, 40 + rnd() * 110);
+      x = nx; y = ny;
+    }
+    if (depth > 0){
+      branch(x, y, a - 0.5, len * 0.6, w * 0.6, depth - 1);
+      branch(x, y, a + 0.5, len * 0.6, w * 0.6, depth - 1);
+    } else {
+      // curl the tip into a spiral, like the reference
+      const dir = rnd() < 0.5 ? 1 : -1; let sp = 7, ww = Math.max(1, w);
+      for (let i = 0; i < 26; i++){
+        a += dir * (0.25 + i * 0.03); sp *= 0.93;
+        const nx = x + Math.cos(a) * sp, ny = y + Math.sin(a) * sp;
+        t.lineWidth = ww; t.beginPath(); t.moveTo(x, y); t.lineTo(nx, ny); t.stroke();
+        x = nx; y = ny; ww *= 0.97;
+      }
+      tendril(x, y, 50 + rnd() * 80);
+    }
+  }
+  const base = Math.min(W, H);
+  branch(W * 0.30, H + 20, -Math.PI / 2 + 0.15, base * 1.0, base * 0.07, 5);   // left tree
+  branch(W * 0.74, H + 20, -Math.PI / 2 - 0.2, base * 0.95, base * 0.065, 5);  // right tree
+  branch(-10, H * 0.55, -0.3, base * 0.7, base * 0.035, 4);                    // left reaching limb
+  branch(W + 10, H * 0.25, Math.PI + 0.35, base * 0.7, base * 0.035, 4);       // right reaching limb
+  // ground fade
+  const gr = t.createLinearGradient(0, H * 0.9, 0, H);
+  gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(1, 'rgba(0,0,0,1)');
+  t.fillStyle = gr; t.fillRect(0, H * 0.9, W, H * 0.1);
+}
+
+/* bats + fog */
+const bats = Array.from({ length: 5 }, (_, i) => ({ x: Math.random() * 1000, y: 80 + Math.random() * 300, s: 0.6 + Math.random() * 0.9, v: 0.6 + Math.random() * 0.8, p: Math.random() * 6 }));
+function drawBat(b, tm){
+  const flap = Math.sin(tm * 0.012 + b.p) * 0.6;
+  ctx.save(); ctx.translate(b.x, b.y); ctx.scale(b.s, b.s); ctx.fillStyle = '#000';
+  ctx.beginPath(); ctx.moveTo(0, 0);
+  ctx.quadraticCurveTo(-14, -10 - flap * 14, -28, 2 + flap * 8); ctx.quadraticCurveTo(-16, -1, -8, 6);
+  ctx.quadraticCurveTo(-2, 2, 0, 6); ctx.quadraticCurveTo(2, 2, 8, 6); ctx.quadraticCurveTo(16, -1, 28, 2 + flap * 8);
+  ctx.quadraticCurveTo(14, -10 - flap * 14, 0, 0); ctx.fill(); ctx.restore();
+}
+
+function drawOldScene(){
+  const tm = Date.now();
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.drawImage(skyLayer, 0, 0);
+
+  // moon: breathes when idle, warps when speaking
+  pulse *= 0.92;
+  const idle = Math.sin(tm * 0.001) * 3;
+  const talk = isSpeaking ? (Math.sin(tm * 0.012) * 6 + pulse * 22) : 0;
+  const r = moonR + idle + talk;
+  const glow = ctx.createRadialGradient(moonX, moonY, r * 0.1, moonX, moonY, r * 4.5);
+  glow.addColorStop(0, 'rgba(210,235,255,.95)'); glow.addColorStop(0.15, 'rgba(150,190,255,.55)'); glow.addColorStop(1, 'rgba(60,60,160,0)');
+  ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(moonX, moonY, r * 4.5, 0, 7); ctx.fill();
+  ctx.fillStyle = '#eef6ff'; ctx.beginPath(); ctx.arc(moonX, moonY, r, 0, 7); ctx.fill();
+
+  // fog
+  for (let i = 0; i < 3; i++){
+    const fx = ((tm * 0.01 * (i + 1) + i * 400) % (W + 600)) - 300, fy = H * (0.72 + i * 0.07);
+    const f = ctx.createRadialGradient(fx, fy, 0, fx, fy, 320);
+    f.addColorStop(0, 'rgba(180,185,255,.10)'); f.addColorStop(1, 'rgba(180,185,255,0)');
+    ctx.fillStyle = f; ctx.fillRect(fx - 320, fy - 320, 640, 640);
+  }
+
+  ctx.drawImage(treeLayer, 0, 0);
+
+  bats.forEach(b => { b.x += b.v * 1.2; b.y += Math.sin(tm * 0.002 + b.p) * 0.4; if (b.x > W + 40) { b.x = -40; b.y = 60 + Math.random() * H * 0.4; } drawBat(b, tm); });
+}
+
+/* ---------- THE ORACLE'S PORTRAIT ----------
+   Put your image next to index.html and name it oracle.jpg.
+   The mouth zone below is tuned for the portrait you showed me (fractions of image height).
+   If her lips look off, nudge top / mid / chin / neck by 0.01 at a time. */
+const portrait = new Image(); let portraitOK = false;
+portrait.onload = () => { portraitOK = true; };
+portrait.src = 'oracle.jpg';
+const MOUTH = { top: 0.425, mid: 0.452, chin: 0.505, neck: 0.575 };
+const MOUTH_OPEN = 0.018;   // how far the jaw drops (fraction of image height)
+function smooth(t){ return t * t * (3 - 2 * t); }
+function dispAt(f, amp){
+  const m = MOUTH;
+  if (f <= m.top || f >= m.neck) return 0;
+  if (f < m.mid) return amp * smooth((f - m.top) / (m.mid - m.top));
+  if (f <= m.chin) return amp;
+  return amp * (1 - smooth((f - m.chin) / (m.neck - m.chin)));
+}
+function drawPortrait(tm){
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  const iw = portrait.naturalWidth, ih = portrait.naturalHeight;
+  const scale = Math.min(H / ih, W / iw) * (1 + Math.sin(tm * 0.0013) * 0.004); // slow breathing
+  const dw = iw * scale, dh = ih * scale, dx = (W - dw) / 2, dy = (H - dh) / 2;
+  pulse *= 0.9;
+  const open = isSpeaking ? Math.abs(Math.sin(tm * 0.017)) * (0.4 + 0.6 * Math.min(1, pulse + 0.35)) : 0;
+  const amp = open * dh * MOUTH_OPEN, step = 2;
+  for (let sy = 0; sy < ih; sy += step){
+    const y0 = dy + sy * scale + dispAt(sy / ih, amp);
+    const y1 = dy + (sy + step) * scale + dispAt((sy + step) / ih, amp);
+    ctx.drawImage(portrait, 0, sy, iw, step, dx, y0, dw, y1 - y0 + 0.6);
+  }
+  // faint cold glow that swells with her voice
+  ctx.globalCompositeOperation = 'lighter';
+  const gl = ctx.createRadialGradient(W / 2, H * 0.35, 0, W / 2, H * 0.35, Math.min(W, H) * 0.55);
+  gl.addColorStop(0, 'rgba(120,150,255,' + (isSpeaking ? 0.10 + pulse * 0.08 : 0.03) + ')'); gl.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = gl; ctx.fillRect(0, 0, W, H);
+  // fade edges to black so she floats inside the globe
+  ctx.globalCompositeOperation = 'source-over';
+  const v = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.25, W / 2, H / 2, Math.max(W, H) * 0.62);
+  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,.95)');
+  ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+}
+/* ---------- PROJECTION MAPPING ----------
+   G grid, arrows move, +/- resize, 0 reset, V cycles voices. Saved on this device. */
+const MAP_DEFAULT = { x: 0, y: 0, s: 1 };
+let map = { ...MAP_DEFAULT }, showGrid = false;
+try { map = { ...MAP_DEFAULT, ...JSON.parse(localStorage.getItem('oracle_map') || '{}') }; } catch (e) {}
+function applyMap(){
+  canvas.style.transform = 'translate(' + map.x + 'px,' + map.y + 'px) scale(' + map.s + ')';
+  try { localStorage.setItem('oracle_map', JSON.stringify(map)); } catch (e) {}
+}
+function drawGrid(){
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.strokeStyle = 'rgba(0,255,160,.6)'; ctx.lineWidth = 1; ctx.beginPath();
+  for (let i = 0; i <= 10; i++){ const x = W * i / 10, y = H * i / 10; ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.moveTo(0, y); ctx.lineTo(W, y); }
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,60,120,.9)'; ctx.lineWidth = 2; ctx.beginPath();
+  ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2);
+  ctx.moveTo(W / 2 + Math.min(W, H) / 2, H / 2); ctx.arc(W / 2, H / 2, Math.min(W, H) / 2, 0, Math.PI * 2);
+  ctx.stroke();
+}
+addEventListener('keydown', (e) => {
+  const step = e.shiftKey ? 20 : 4, k = e.key;
+  if (k === 'g' || k === 'G') showGrid = !showGrid;
+  else if (k === 'ArrowLeft') map.x -= step;
+  else if (k === 'ArrowRight') map.x += step;
+  else if (k === 'ArrowUp') map.y -= step;
+  else if (k === 'ArrowDown') map.y += step;
+  else if (k === '+' || k === '=') map.s = Math.min(4, map.s * 1.01);
+  else if (k === '-' || k === '_') map.s = Math.max(0.2, map.s / 1.01);
+  else if (k === '0') map = { ...MAP_DEFAULT };
+  else if (k === 'v' || k === 'V') { cycleVoice(); return; }
+  else return;
+  e.preventDefault(); applyMap();
+});
+applyMap();
+
+function drawScene(){
+  if (!W || !H){ buildScene(); requestAnimationFrame(drawScene); return; }   // page can load before it has a size
+  const tm = Date.now();
+  if (portraitOK) drawPortrait(tm); else drawOldScene();   // falls back to the moon scene if no oracle.jpg
+  if (showGrid) drawGrid();
+  requestAnimationFrame(drawScene);
+}
+addEventListener('resize', buildScene);
+buildScene(); drawScene();
+
+/* ---------- SPOOKY MUSIC (generated live, no audio files needed) ---------- */
+let ac, master, musicOn = false;
+function startMusic(){
+  if (musicOn) return; musicOn = true;
+  ac = new (window.AudioContext || window.webkitAudioContext)(); ac.resume();
+  master = ac.createGain(); master.gain.value = 0.5; master.connect(ac.destination);
+  // cavernous reverb from generated noise
+  const len = ac.sampleRate * 3, ir = ac.createBuffer(2, len, ac.sampleRate);
+  for (let c = 0; c < 2; c++){ const d = ir.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.5); }
+  const verb = ac.createConvolver(); verb.buffer = ir;
+  const wet = ac.createGain(); wet.gain.value = 0.6; verb.connect(wet); wet.connect(master);
+  // low, slowly breathing drone
+  const drone = ac.createGain(); drone.gain.value = 0.08;
+  const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 260;
+  [55, 55.4, 82.4].forEach(f => { const o = ac.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f; o.connect(lp); o.start(); });
+  lp.connect(drone); drone.connect(master); drone.connect(verb);
+  const lfo = ac.createOscillator(); lfo.frequency.value = 0.07;
+  const lg = ac.createGain(); lg.gain.value = 120; lfo.connect(lg); lg.connect(lp.frequency); lfo.start();
+  // eerie music-box notes (A harmonic minor), with gaps of silence
+  const notes = [440, 523.25, 659.25, 587.33, 523.25, 493.88, 440, 415.3, 329.63, 392, 440, 329.63];
+  let n = 0;
+  function pluck(f){
+    const o = ac.createOscillator(), g = ac.createGain(); o.type = 'triangle'; o.frequency.value = f;
+    g.gain.setValueAtTime(0, ac.currentTime); g.gain.linearRampToValueAtTime(0.09, ac.currentTime + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + 2.2);
+    o.connect(g); g.connect(master); g.connect(verb); o.start(); o.stop(ac.currentTime + 2.3);
+  }
+  setInterval(() => {
+    if (Math.random() < 0.25) return;
+    pluck(notes[(n++ + (Math.random() < 0.2 ? 1 : 0)) % notes.length] * (Math.random() < 0.15 ? 2 : 1));
+  }, 700);
+}
+function duck(on){ if (master) master.gain.linearRampToValueAtTime(on ? 0.2 : 0.5, ac.currentTime + 0.6); }
+
+/* ---------- VOICE IN ---------- */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null, listening = false, gotResult = false;
+if (SR){
+  recognition = new SR();
+  recognition.continuous = false; recognition.interimResults = false; recognition.lang = 'en-US';
+  recognition.onresult = async (e) => {
+    gotResult = true;
+    const userText = e.results[0][0].transcript;
+    statusText.innerText = "Thinking...";
+    const reply = await askOracle(userText);
+    speak(reply);
+  };
+  recognition.onerror = (e) => { statusText.innerText = e.error === 'not-allowed' ? "Allow the microphone in Safari settings" : "Tap to speak again"; };
+  recognition.onend = () => { listening = false; if (!gotResult && !isSpeaking && statusText.innerText.startsWith("Listening")) statusText.innerText = "Tap to speak"; };
+} else {
+  statusText.innerText = "Speech recognition not supported in this browser";
+}
+
+let unlocked = false;
+document.body.addEventListener('click', () => {
+  if (!unlocked){ // first tap: unlock iOS speech, ask for key, and she greets you
+    unlocked = true; startMusic(); window.speechSynthesis.speak(new SpeechSynthesisUtterance(''));
+    if (getKey()) speak(GREETING);
+    return;
+  }
+  if (!recognition || isSpeaking || listening) return;
+  if (!getKey()) return;
+  gotResult = false; listening = true;
+  try { recognition.start(); statusText.innerText = "Listening..."; } catch (err) { listening = false; }
+});
+
+/* ---------- AI BRAIN ---------- */
+function getKey(){
+  let k = localStorage.getItem('oracle_key');
+  if (!k){ k = prompt("Paste your Anthropic API key (stored only on this device):"); if (k) localStorage.setItem('oracle_key', k.trim()); }
+  return k;
+}
+const history = [];
+async function askOracle(text){
+  history.push({ role: 'user', content: text });
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": localStorage.getItem('oracle_key'),
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
+      body: JSON.stringify({ model: MODEL, max_tokens: 110, thinking: { type: "disabled" },
+        system: SYSTEM_PROMPT, messages: history.slice(-6) })
+    });
+    if (res.status === 401){ localStorage.removeItem('oracle_key'); history.pop(); return "My key has crumbled to dust."; }
+    if (!res.ok) throw new Error(res.status);
+    const data = await res.json();
+    const block = data.content.find(b => b.type === 'text');
+    if (!block) throw new Error('no text');
+    const reply = block.text.trim();
+    history.push({ role: 'assistant', content: reply });
+    return reply;
+  } catch (e) {
+    history.pop();   // keep user/assistant turns alternating after a failed call
+    return FALLBACKS[Math.floor(Math.random() * FALLBACKS.length)];
+  }
+}
+
+/* ---------- VOICE OUT ---------- */
+let voiceName = null;
+try { voiceName = localStorage.getItem('oracle_voice'); } catch (e) {}
+function englishVoices(){ return speechSynthesis.getVoices().filter(x => x.lang.startsWith('en')); }
+function pickVoice(){
+  const v = englishVoices();
+  return v.find(x => x.name === voiceName)                                  // chosen with V
+      || v.find(x => /serena|kate|moira|fiona|tessa|martha/i.test(x.name))   // soft British voices first
+      || v.find(x => /samantha|karen|victoria/i.test(x.name)) || v.find(x => x.lang === 'en-GB') || v[0];
+}
+function cycleVoice(){
+  const v = englishVoices(); if (!v.length) return;
+  const cur = pickVoice(), next = v[(v.indexOf(cur) + 1) % v.length];
+  voiceName = next.name;
+  try { localStorage.setItem('oracle_voice', voiceName); } catch (e) {}
+  speak("Do you hear me now?");
+  statusText.innerText = "Voice: " + voiceName;
+}
+function speak(text){
+  isSpeaking = true; duck(true); statusText.innerText = text;
+  const u = new SpeechSynthesisUtterance(text);
+  u.pitch = 0.95; u.rate = 0.8;   // soft, slow, hushed
+  const voice = pickVoice(); if (voice) u.voice = voice;
+  u.onboundary = () => { pulse = 1; };           // moon jolts on each word
+  u.onend = u.onerror = () => { isSpeaking = false; duck(false); statusText.innerText = "Tap to speak again"; };
+  speechSynthesis.cancel(); speechSynthesis.speak(u);
+}
+speechSynthesis.onvoiceschanged = () => {};
+</script>
+</body>
+</html>
